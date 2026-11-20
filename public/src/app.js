@@ -229,7 +229,21 @@ function bindEvents(){
   $("start-game").onclick=startNewGame;
   document.querySelectorAll(".nav-item[data-view]").forEach(b=>b.onclick=()=>setView(b.dataset.view));
   document.querySelectorAll("[data-goto]").forEach(b=>b.onclick=()=>setView(b.dataset.goto));
-  $("mobile-menu").onclick=()=>$("sidebar").classList.toggle("open");
+  const mobileMenu=$("mobile-menu"), sidebar=$("sidebar"), sidebarBackdrop=$("sidebar-backdrop");
+  const setSidebarOpen=(open)=>{
+    const isMobile=window.matchMedia("(max-width: 760px)").matches;
+    const shouldOpen=Boolean(open&&isMobile);
+    sidebar.classList.toggle("open",shouldOpen);
+    sidebarBackdrop.classList.toggle("visible",shouldOpen);
+    mobileMenu.setAttribute("aria-expanded",String(shouldOpen));
+    mobileMenu.setAttribute("aria-label",shouldOpen?"Close navigation":"Open navigation");
+    document.body.classList.toggle("nav-open",shouldOpen);
+  };
+  mobileMenu.addEventListener("click",()=>setSidebarOpen(!sidebar.classList.contains("open")));
+  sidebarBackdrop.addEventListener("click",()=>setSidebarOpen(false));
+  sidebar.querySelectorAll(".nav-item[data-view]").forEach(item=>item.addEventListener("click",()=>setSidebarOpen(false)));
+  document.addEventListener("keydown",e=>{if(e.key==="Escape"&&sidebar.classList.contains("open"))setSidebarOpen(false);});
+  window.addEventListener("resize",()=>{if(!window.matchMedia("(max-width: 760px)").matches)setSidebarOpen(false);});
   $("pause-btn").onclick=async()=>{paused=!paused;bank.paused=paused;updatePauseButton();await saveCurrent();toast(paused?"Simulation paused.":"Simulation resumed.");};
   document.querySelectorAll(".speed-btn").forEach(b=>b.onclick=async()=>{speed=Number(b.dataset.speed);bank.speed=speed;document.querySelectorAll(".speed-btn").forEach(x=>x.classList.toggle("active",x===b));await saveCurrent();});
   $("theme-toggle").onclick=()=>openSettings();$("settings-menu").onclick=()=>openSettings();$("save-menu").onclick=()=>openSaveModal();
