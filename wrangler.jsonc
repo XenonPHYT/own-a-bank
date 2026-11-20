@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "own-a-bank",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-20",
+
+  // Static application files are deployed alongside the Worker.
+  // Cloudflare's Git integration runs `npx wrangler deploy` on repository updates.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "description": "Illustrative raw simulation ingredients. These are source materials, not fixed event scripts.",
+  "terms": {
+    "subjects": [
+      "retail depositors",
+      "small businesses",
+      "corporate borrowers",
+      "regional employers",
+      "payment users",
+      "institutional clients"
+    ],
+    "pressures": [
+      "economic uncertainty",
+      "seasonal cash demand",
+      "competitive pricing",
+      "rising operating costs",
+      "changing customer confidence",
+      "credit quality deterioration",
+      "digital service disruption"
+    ],
+    "behaviors": [
+      "increase withdrawals",
+      "delay repayments",
+      "move deposits",
+      "seek refinancing",
+      "increase savings",
+      "compare lending rates",
+      "adopt digital services"
+    ],
+    "contexts": [
+      "local market",
+      "regional economy",
+      "national financial market",
+      "cross-border operations",
+      "digital banking channel"
+    ],
+    "directions": [
+      "rising",
+      "declining",
+      "volatile",
+      "stable",
+      "recovering",
+      "uneven"
+    ],
+    "severity": [
+      "limited",
+      "moderate",
+      "elevated",
+      "material"
+    ],
+    "actions": [
+      "review liquidity planning",
+      "reassess credit exposure",
+      "strengthen customer communication",
+      "review operating expenditure",
+      "adjust lending criteria",
+      "improve service capacity"
+    ]
+  },
+  "probability_ranges": {
+    "easy": {
+      "event": [
+        0.1,
+        0.28
+      ],
+      "adverse": [
+        0.06,
+        0.18
+      ]
+    },
+    "medium": {
+      "event": [
+        0.14,
+        0.36
+      ],
+      "adverse": [
+        0.1,
+        0.25
+      ]
+    },
+    "hard": {
+      "event": [
+        0.18,
+        0.44
+      ],
+      "adverse": [
+        0.14,
+        0.32
+      ]
+    }
+  },
+  "level_context": [
+    {
+      "min": 1,
+      "max": 10,
+      "scope": [
+        "local market"
+      ],
+      "complexity": 1
+    },
+    {
+      "min": 11,
+      "max": 20,
+      "scope": [
+        "local market",
+        "regional economy"
+      ],
+      "complexity": 1
+    },
+    {
+      "min": 21,
+      "max": 35,
+      "scope": [
+        "regional economy"
+      ],
+      "complexity": 2
+    },
+    {
+      "min": 36,
+      "max": 50,
+      "scope": [
+        "regional economy",
+        "national financial market"
+      ],
+      "complexity": 2
+    },
+    {
+      "min": 51,
+      "max": 65,
+      "scope": [
+        "national financial market"
+      ],
+      "complexity": 3
+    },
+    {
+      "min": 66,
+      "max": 80,
+      "scope": [
+        "national financial market",
+        "cross-border operations"
+      ],
+      "complexity": 3
+    },
+    {
+      "min": 81,
+      "max": 90,
+      "scope": [
+        "cross-border operations"
+      ],
+      "complexity": 4
+    },
+    {
+      "min": 91,
+      "max": 100,
+      "scope": [
+        "cross-border operations",
+        "digital banking channel"
+      ],
+      "complexity": 4
+    }
+  ]
+}
