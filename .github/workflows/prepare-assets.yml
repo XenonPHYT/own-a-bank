@@ -1,0 +1,72 @@
+name: Prepare browser runtime and geography data
+
+on:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - "public/pyodide/**"
+      - "public/src/geography.json"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download the pinned Pyodide core runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="0.27.7"
+          mkdir -p public/pyodide build/pyodide
+          curl -fL "https://github.com/pyodide/pyodide/releases/download/${VERSION}/pyodide-core-${VERSION}.tar.bz2" \
+            -o build/pyodide/pyodide-core.tar.bz2
+          tar -xjf build/pyodide/pyodide-core.tar.bz2 -C build/pyodide
+          RUNTIME_DIR="$(find build/pyodide -type f -name pyodide.js -printf '%h\n' | head -n 1)"
+          if [ -z "$RUNTIME_DIR" ]; then
+            echo "Could not locate pyodide.js in the downloaded archive."
+            exit 1
+          fi
+          cp -a "$RUNTIME_DIR"/. public/pyodide/
+          test -s public/pyodide/pyodide.js
+          test -s public/pyodide/pyodide.asm.wasm
+
+      - name: Download GeoNames administrative and populated-place data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/geonames
+          cd build/geonames
+          curl -fL https://download.geonames.org/export/dump/countryInfo.txt -o countryInfo.txt
+          curl -fL https://download.geonames.org/export/dump/admin1CodesASCII.txt -o admin1CodesASCII.txt
+          curl -fL https://download.geonames.org/export/dump/admin2Codes.txt -o admin2Codes.txt
+          curl -fL https://download.geonames.org/export/dump/cities1000.zip -o cities1000.zip
+          unzip -o cities1000.zip
+          cd ../..
+
+      - name: Build hierarchical location directory
+        run: python scripts/build-geography.py --source build/geonames --output public/src/geography.json
+
+      - name: Commit prepared assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/pyodide public/src/geography.json
+          if git diff --cached --quiet; then
+            echo "Prepared assets are already current."
+            exit 0
+          fi
+          git commit -m "Prepare local Pyodide runtime and geographic data"
+          git push

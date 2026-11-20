@@ -35,17 +35,18 @@
         </div>
         <label class="field-label" for="bank-name">Bank name</label>
         <input id="bank-name" maxlength="36" value="Northstar Community Bank" placeholder="Enter your bank name">
-        <label class="field-label" for="bank-region">Head office location</label>
-        <select id="bank-region">
-          <option>Baybay City, Leyte</option>
-          <option>Cebu City, Cebu</option>
-          <option>Ormoc City, Leyte</option>
-          <option>Tacloban City, Leyte</option>
-          <option>Iloilo City, Iloilo</option>
-          <option>Davao City, Davao del Sur</option>
-          <option>Quezon City, Metro Manila</option>
-          <option>Makati City, Metro Manila</option>
-        </select>
+        <div class="location-heading">
+          <label class="field-label" for="country-select">Head office location</label>
+          <span class="location-note">Choose a general area. No street address or postal code is required.</span>
+        </div>
+        <div class="location-grid">
+          <div><label class="field-label" for="country-select">Country</label><select id="country-select"><option value="PH">Philippines</option></select></div>
+          <div><label class="field-label" for="region-select">Region / State</label><select id="region-select" disabled><option value="">Select a country first</option></select></div>
+          <div><label class="field-label" for="province-select">Province / District</label><select id="province-select" disabled><option value="">Select a region first</option></select></div>
+          <div><label class="field-label" for="location-search">Find a city or local area</label><input id="location-search" type="search" placeholder="Search available places…" disabled></div>
+          <div><label class="field-label" for="city-select">City / Municipality / Local area</label><select id="city-select" disabled><option value="">Select an area first</option></select></div>
+        </div>
+        <p id="location-summary" class="location-summary">Philippines · Select a region to continue.</p>
         <label class="field-label">Difficulty</label>
         <div class="difficulty-grid">
           <button class="difficulty-card selected" data-difficulty="easy" type="button">

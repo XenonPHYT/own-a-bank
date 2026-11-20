@@ -3,7 +3,8 @@ const DB_NAME = "own-a-bank";
 const DB_VERSION = 1;
 const SLOT_COUNT = 3;
 const $ = (id) => document.getElementById(id);
-let pyodide, bank = null, datasets = null, selectedDifficulty = "easy", currentView = "overview";
+let pyodide, bank = null, datasets = null, geography = null, selectedDifficulty = "easy", currentView = "overview";
+let selectedGeo = {country:null, region:null, province:null, city:null};
 let timer = null, paused = false, speed = 1, currentApplication = null;
 
 const money = (v) => new Intl.NumberFormat("en-PH",{style:"currency",currency:"PHP",maximumFractionDigits:0}).format(Number(v||0));
@@ -14,11 +15,111 @@ function toast(message,error=false){const el=document.createElement("div");el.cl
 function showModal(html){$("modal-root").innerHTML=`<div class="modal-backdrop"><div class="modal-card">${html}</div></div>`;$("modal-root").querySelector(".modal-backdrop").addEventListener("click",e=>{if(e.target.classList.contains("modal-backdrop"))closeModal();});}
 function closeModal(){$("modal-root").innerHTML="";}
 async function loadPyodideRuntime(){
-  const script=document.createElement("script");script.src=`https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/pyodide.js`;
+  const localScript="/pyodide/pyodide.js";
+  let scriptUrl=localScript,indexURL="/pyodide/";
+  try{const check=await fetch(localScript,{method:"HEAD",cache:"no-store"});if(!check.ok)throw new Error("Local runtime not prepared");}
+  catch(_){scriptUrl=`https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/pyodide.js`;indexURL=`https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;}
+  const script=document.createElement("script");script.src=scriptUrl;
   document.head.append(script);await new Promise((res,rej)=>{script.onload=res;script.onerror=rej;});
-  pyodide=await loadPyodide();const [pyRes,dataRes]=await Promise.all([fetch("/src/simulation.py"),fetch("/src/datasets.json")]);
+  pyodide=await loadPyodide({indexURL});const [pyRes,dataRes,geoRes]=await Promise.all([
+    fetch("/src/simulation.py"),fetch("/src/datasets.json"),fetch("/src/geography.json")
+  ]);
   if(!pyRes.ok||!dataRes.ok)throw new Error("Unable to load simulation assets.");
   const pyText=await pyRes.text();datasets=await dataRes.json();pyodide.runPython(pyText);
+  geography=geoRes.ok?await geoRes.json():fallbackGeography();
+  initializeGeography();
+}
+function fallbackGeography(){
+  const provinces=[
+    ["NCR","National Capital Region",[{name:"Manila"},{name:"Quezon City"},{name:"Makati City"},{name:"Pasig City"},{name:"Taguig City"}]],
+    ["I","Ilocos Region",[{name:"Ilocos Norte"},{name:"Ilocos Sur"},{name:"La Union"},{name:"Pangasinan"}]],
+    ["II","Cagayan Valley",[{name:"Batanes"},{name:"Cagayan"},{name:"Isabela"},{name:"Nueva Vizcaya"},{name:"Quirino"}]],
+    ["III","Central Luzon",[{name:"Aurora"},{name:"Bataan"},{name:"Bulacan"},{name:"Nueva Ecija"},{name:"Pampanga"},{name:"Tarlac"},{name:"Zambales"}]],
+    ["IV-A","Calabarzon",[{name:"Batangas"},{name:"Cavite"},{name:"Laguna"},{name:"Quezon"},{name:"Rizal"}]],
+    ["IV-B","Mimaropa",[{name:"Marinduque"},{name:"Occidental Mindoro"},{name:"Oriental Mindoro"},{name:"Palawan"},{name:"Romblon"}]],
+    ["V","Bicol Region",[{name:"Albay"},{name:"Camarines Norte"},{name:"Camarines Sur"},{name:"Catanduanes"},{name:"Masbate"},{name:"Sorsogon"}]],
+    ["VI","Western Visayas",[{name:"Aklan"},{name:"Antique"},{name:"Capiz"},{name:"Guimaras"},{name:"Iloilo"},{name:"Negros Occidental"}]],
+    ["VII","Central Visayas",[{name:"Bohol"},{name:"Cebu"},{name:"Negros Oriental"},{name:"Siquijor"}]],
+    ["VIII","Eastern Visayas",[{name:"Biliran"},{name:"Eastern Samar"},{name:"Leyte"},{name:"Northern Samar"},{name:"Samar"},{name:"Southern Leyte"}]],
+    ["IX","Zamboanga Peninsula",[{name:"Zamboanga del Norte"},{name:"Zamboanga del Sur"},{name:"Zamboanga Sibugay"}]],
+    ["X","Northern Mindanao",[{name:"Bukidnon"},{name:"Camiguin"},{name:"Lanao del Norte"},{name:"Misamis Occidental"},{name:"Misamis Oriental"}]],
+    ["XI","Davao Region",[{name:"Davao de Oro"},{name:"Davao del Norte"},{name:"Davao del Sur"},{name:"Davao Occidental"},{name:"Davao Oriental"}]],
+    ["XII","Soccsksargen",[{name:"Cotabato"},{name:"Sarangani"},{name:"South Cotabato"},{name:"Sultan Kudarat"}]],
+    ["XIII","Caraga",[{name:"Agusan del Norte"},{name:"Agusan del Sur"},{name:"Dinagat Islands"},{name:"Surigao del Norte"},{name:"Surigao del Sur"}]],
+    ["CAR","Cordillera Administrative Region",[{name:"Abra"},{name:"Apayao"},{name:"Benguet"},{name:"Ifugao"},{name:"Kalinga"},{name:"Mountain Province"}]],
+    ["BARMM","Bangsamoro Autonomous Region",[{name:"Basilan"},{name:"Lanao del Sur"},{name:"Maguindanao del Norte"},{name:"Maguindanao del Sur"},{name:"Sulu"},{name:"Tawi-Tawi"}]]
+  ];
+  return {countries:[{code:"PH",name:"Philippines",admin1:provinces.map(([code,name,ps])=>({
+    code,name,admin2:ps.map((p,i)=>({
+      code:`${code}-${i}`,name:p.name,
+      places:(p.name==="Leyte"?["Baybay City","Ormoc City","Tacloban City"]:p.name==="Cebu"?["Cebu City","Mandaue City","Lapu-Lapu City"]:p.name==="Iloilo"?["Iloilo City"]:p.name==="Davao del Sur"?["Davao City"]:p.name==="National Capital Region"?["Manila","Quezon City","Makati City"]:[]).map((n,j)=>({id:`${code}-${i}-${j}`,name:n,population:0}))
+    }))
+  }))}]};
+}
+function setSelectOptions(el,items,placeholder){
+  el.innerHTML="";const first=document.createElement("option");first.value="";first.textContent=placeholder;el.append(first);
+  items.forEach(item=>{const option=document.createElement("option");option.value=item.code;option.textContent=item.name;el.append(option);});
+  el.disabled=!items.length;
+}
+function initializeGeography(){
+  const countries=(geography?.countries||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
+  setSelectOptions($("country-select"),countries.map(c=>({code:c.code,name:c.name})),"Choose a country");
+  const ph=countries.find(c=>c.code==="PH");if(ph){$("country-select").value="PH";onCountryChange();}
+  $("country-select").addEventListener("change",onCountryChange);
+  $("region-select").addEventListener("change",onRegionChange);
+  $("province-select").addEventListener("change",onProvinceChange);
+  $("city-select").addEventListener("change",updateLocationSummary);
+  $("location-search").addEventListener("input",filterPlaceOptions);
+}
+function onCountryChange(){
+  selectedGeo={country:null,region:null,province:null,city:null};
+  const country=geography.countries.find(c=>c.code===$("country-select").value);selectedGeo.country=country||null;
+  setSelectOptions($("region-select"),(country?.admin1||[]).map(a=>({code:a.code,name:a.name})),"Choose a region / state");
+  setSelectOptions($("province-select"),[],"Choose a region first");setSelectOptions($("city-select"),[],"Choose a province or area first");
+  $("location-search").value="";$("location-search").disabled=true;updateLocationSummary();
+}
+function onRegionChange(){
+  selectedGeo.region=null;selectedGeo.province=null;selectedGeo.city=null;
+  const region=selectedGeo.country?.admin1?.find(a=>a.code===$("region-select").value);selectedGeo.region=region||null;
+  const directPlaces=region?.places||[];
+  const provinceOptions=(region?.admin2||[]).map(a=>({code:a.code,name:a.name}));
+  if(provinceOptions.length&&directPlaces.length)provinceOptions.push({code:`${region.code}.OTHER`,name:"Other areas"});
+  setSelectOptions($("province-select"),provinceOptions,"Choose a province / district");
+  const hasProvinces=provinceOptions.length>0;
+  if(!hasProvinces&&directPlaces.length){setSelectOptions($("city-select"),directPlaces.map(p=>({code:p.id,name:p.name})),"Choose a city / local area");$("location-search").disabled=false;}
+  else {setSelectOptions($("city-select"),[],"Choose a province / district first");$("location-search").disabled=true;}
+  $("location-search").value="";updateLocationSummary();
+}
+function onProvinceChange(){
+  selectedGeo.province=null;selectedGeo.city=null;
+  const selectedCode=$("province-select").value;
+  const province=selectedGeo.region?.admin2?.find(a=>a.code===selectedCode);
+  const otherAreas=selectedCode===`${selectedGeo.region?.code}.OTHER`?{code:selectedCode,name:"Other areas",places:selectedGeo.region?.places||[]}:null;
+  selectedGeo.province=province||otherAreas||null;
+  const places=selectedGeo.province?.places||[];
+  setSelectOptions($("city-select"),places.map(p=>({code:p.id,name:p.name})),"Choose a city / municipality / local area");
+  $("location-search").value="";$("location-search").disabled=!places.length;updateLocationSummary();
+}
+function filterPlaceOptions(){
+  const select=$("city-select"),term=$("location-search").value.trim().toLocaleLowerCase();
+  const list=selectedGeo.province?.places||selectedGeo.region?.places||[];
+  const filtered=list.filter(p=>p.name.toLocaleLowerCase().includes(term));
+  const current=select.value;setSelectOptions(select,filtered.map(p=>({code:p.id,name:p.name})),"Choose a city / municipality / local area");
+  if(filtered.some(p=>p.id===current))select.value=current;
+  updateLocationSummary();
+}
+function updateLocationSummary(){
+  const country=selectedGeo.country,region=selectedGeo.region,province=selectedGeo.province;
+  const places=province?.places||selectedGeo.region?.places||[];
+  selectedGeo.city=places.find(p=>p.id===$("city-select").value)||null;
+  const parts=[selectedGeo.city?.name,province?.name,region?.name,country?.name].filter(Boolean);
+  $("location-summary").textContent=parts.length?parts.join(" · "):"Choose a country, then narrow down to a city or local area.";
+}
+function getSelectedLocation(){
+  updateLocationSummary();
+  if(!selectedGeo.country||!selectedGeo.region||!selectedGeo.city)throw new Error("Please select a country, region / state, and city or local area.");
+  return {country:selectedGeo.country.name,country_code:selectedGeo.country.code,region:selectedGeo.region.name,province:selectedGeo.province?.name||null,city:selectedGeo.city.name,population:selectedGeo.city.population||null,
+    label:[selectedGeo.city.name,selectedGeo.province?.name,selectedGeo.region.name,selectedGeo.country.name].filter(Boolean).join(", ")};
 }
 function pyCall(name,args){const json=JSON.stringify(args);return pyodide.runPython(`json.loads(${JSON.stringify(json)}) if False else None`) /* placeholder */;}
 function callPy(fn,args){
@@ -59,8 +160,11 @@ function enterGame(){
   paused=!!bank.paused;speed=bank.speed||1;updatePauseButton();renderAll();startTimer();
 }
 function startNewGame(){
-  const name=$("bank-name").value.trim()||"Northstar Community Bank",location=$("bank-region").value;
-  const created=callPyPos("new_game",[name,location,selectedDifficulty,null]);
+  let location;
+  try{location=getSelectedLocation();}catch(err){toast(err.message,true);return;}
+  const name=$("bank-name").value.trim()||"Northstar Community Bank";
+  const created=callPyPos("new_game",[name,location.label,selectedDifficulty,null]);
+  created.location_details={country:location.country,country_code:location.country_code,region:location.region,province:location.province,city:location.city,population:location.population};
   bank=created;bank.created_at=Date.now();bank.last_active=Date.now();bank.paused=false;bank.speed=1;
   putSlot(activeSlot,bank).then(()=>{enterGame();toast("Your institution has commenced operations.");});
 }
@@ -150,7 +254,7 @@ async function init(){
     let latest=null;for(let i=1;i<=SLOT_COUNT;i++){const rec=await getSlot(i);if(rec&&(!latest||rec.updatedAt>latest.rec.updatedAt))latest={slot:i,rec};}
     if(latest){activeSlot=latest.slot;bank=migrateSave(latest.rec.data);const elapsed=bank.last_active?Date.now()-bank.last_active:0;if(elapsed>60000){const result=callPyPos("offline_catchup",[bank,datasets,Math.min(86400000,elapsed/1000)]);bank=result.bank;if(result.simulated_ticks)toast(`Welcome back. ${result.simulated_ticks} offline simulation ticks were processed (maximum 24 hours).`);}enterGame();}
     else showSetup();
-  }catch(err){$("boot-screen").innerHTML=`<div class="boot-mark">OB</div><h1>OWN A BANK</h1><p>Unable to initialize the simulation.</p><p style="max-width:560px;text-align:center;color:#e58b8b">${safe(err.message)}</p><p>Check your internet connection and reload. Pyodide is loaded from its CDN.</p>`;console.error(err);}
+  }catch(err){$("boot-screen").innerHTML=`<div class="boot-mark">OB</div><h1>OWN A BANK</h1><p>Unable to initialize the simulation.</p><p style="max-width:560px;text-align:center;color:#e58b8b">${safe(err.message)}</p><p>Check your internet connection and reload. The local Pyodide runtime is prepared by the repository workflow; the CDN is used only as a fallback.</p>`;console.error(err);}
 }
 window.addEventListener("beforeunload",()=>{if(bank){bank.last_active=Date.now();putSlot(activeSlot,bank);}});
 init();
