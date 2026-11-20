@@ -149,15 +149,27 @@ function migrateSave(data){
   data.npl ||= 0;data.credit_policy ||= "balanced";data.speed ||= 1;data.day ||= 1;data.year ||= 2026;
   data.version=1;return data;
 }
+function unwrapBank(result,fallback){
+  if(result&&typeof result==="object"){
+    if(result.bank&&typeof result.bank==="object")return result.bank;
+    if(result.state&&typeof result.state==="object")return result.state;
+    if(result.name!==undefined&&result.cash!==undefined)return result;
+  }
+  return fallback;
+}
 function saveCurrent(){if(!bank)return Promise.resolve();bank.last_active=Date.now();return putSlot(activeSlot,bank);}
 let activeSlot=1;
 async function selectSlot(slot){activeSlot=slot;const rec=await getSlot(slot);if(rec?.data){bank=migrateSave(rec.data);enterGame();toast(`Loaded save slot ${slot}.`);}else{bank=null;showSetup();}}
 function showSetup(){$("setup-screen").classList.remove("hidden");$("game-screen").classList.add("hidden");}
 function enterGame(){
+  if(!bank){showSetup();return;}
   $("setup-screen").classList.add("hidden");$("game-screen").classList.remove("hidden");
   $("side-bank-name").textContent=bank.name;$("side-bank-location").textContent=bank.location;
   $("welcome-bank-name").textContent=bank.name;
-  paused=!!bank.paused;speed=bank.speed||1;updatePauseButton();renderAll();startTimer();
+  paused=!!bank.paused;speed=bank.speed||1;updatePauseButton();
+  document.querySelectorAll(".speed-btn").forEach(x=>x.classList.toggle("active",Number(x.dataset.speed)===speed));
+  try{renderAll();}catch(err){console.error(err);toast("Display error: "+(err.message||err),true);}
+  startTimer();
 }
 function startNewGame(){
   let location;
@@ -169,7 +181,7 @@ function startNewGame(){
   putSlot(activeSlot,bank).then(()=>{enterGame();toast("Your institution has commenced operations.");});
 }
 function stopTimer(){if(timer)clearInterval(timer);timer=null;}
-function startTimer(){stopTimer();timer=setInterval(()=>{if(!bank||paused)return;const result=callPyPos("tick",[bank,datasets,speed,null]);bank=result.bank;renderAll();if(result.new_events?.length)result.new_events.forEach(e=>toast(e.title));saveCurrent();},12000);}
+function startTimer(){stopTimer();timer=setInterval(()=>{if(!bank||paused)return;try{const result=callPyPos("tick",[bank,datasets,speed,null]);bank=unwrapBank(result,bank);renderAll();if(result?.new_events?.length)result.new_events.forEach(e=>toast(e.title));saveCurrent();}catch(err){console.error("Simulation tick failed:",err);}},12000);}
 function updatePauseButton(){$("pause-btn").textContent=paused?"▶ Resume":"Ⅱ Pause";}
 function setView(view){
   currentView=view;document.querySelectorAll(".view").forEach(el=>el.classList.remove("active"));
@@ -266,9 +278,9 @@ async function init(){
     $("boot-screen").classList.add("hidden");$("app").classList.remove("hidden");
     // Resume most recently active populated slot; otherwise show new game setup.
     let latest=null;for(let i=1;i<=SLOT_COUNT;i++){const rec=await getSlot(i);if(rec&&(!latest||rec.updatedAt>latest.rec.updatedAt))latest={slot:i,rec};}
-    if(latest){activeSlot=latest.slot;bank=migrateSave(latest.rec.data);const elapsed=bank.last_active?Date.now()-bank.last_active:0;if(elapsed>60000){const result=callPyPos("offline_catchup",[bank,datasets,Math.min(86400000,elapsed/1000)]);bank=result.bank;if(result.simulated_ticks)toast(`Welcome back. ${result.simulated_ticks} offline simulation ticks were processed (maximum 24 hours).`);}enterGame();}
+    if(latest){activeSlot=latest.slot;bank=migrateSave(latest.rec.data);const elapsed=bank.last_active?Date.now()-bank.last_active:0;if(elapsed>60000){try{const result=callPyPos("offline_catchup",[bank,datasets,Math.min(86400000,elapsed/1000)]);const caught=unwrapBank(result,null);if(caught){bank=caught;if(result?.simulated_ticks)toast(`Welcome back. ${result.simulated_ticks} offline simulation ticks were processed (maximum 24 hours).`);}else console.warn("Offline catch-up returned an unexpected result; keeping saved state.",result);}catch(err){console.warn("Offline catch-up skipped; keeping saved state.",err);}}enterGame();}
     else showSetup();
-  }catch(err){$("boot-screen").innerHTML=`<div class="boot-mark">OB</div><h1>OWN A BANK</h1><p>Unable to initialize the simulation.</p><p style="max-width:560px;text-align:center;color:#e58b8b">${safe(err.message)}</p><p>Check your internet connection and reload. The local Pyodide runtime is prepared by the repository workflow; the CDN is used only as a fallback.</p>`;console.error(err);}
+  }catch(err){$("app").classList.add("hidden");$("boot-screen").classList.remove("hidden");$("boot-screen").innerHTML=`<div class="boot-mark">OB</div><h1>OWN A BANK</h1><p>Unable to initialize the simulation.</p><p style="max-width:560px;text-align:center;color:#e58b8b">${safe(err.message)}</p><p>Check your internet connection and reload. The local Pyodide runtime is prepared by the repository workflow; the CDN is used only as a fallback.</p>`;console.error(err);}
 }
 window.addEventListener("beforeunload",()=>{if(bank){bank.last_active=Date.now();putSlot(activeSlot,bank);}});
 init();
