@@ -118,7 +118,7 @@ function updateLocationSummary(){
 function getSelectedLocation(){
   updateLocationSummary();
   if(!selectedGeo.country||!selectedGeo.region||!selectedGeo.city)throw new Error("Please select a country, region / state, and city or local area.");
-  return {country:selectedGeo.country.name,country_code:selectedGeo.country.code,region:selectedGeo.region.name,province:selectedGeo.province?.name||null,city:selectedGeo.city.name,population:selectedGeo.city.population||null,
+  return {country:selectedGeo.country.name,country_code:selectedGeo.country.code,region:selectedGeo.region.name,province:selectedGeo.province?.name||null,city:selectedGeo.city.name,population:selectedGeo.city.population||null,place_id:String(selectedGeo.city.id??""),admin1_code:selectedGeo.region?.code||null,admin2_code:selectedGeo.province?.code||null,
     label:[selectedGeo.city.name,selectedGeo.province?.name,selectedGeo.region.name,selectedGeo.country.name].filter(Boolean).join(", ")};
 }
 function pyCall(name,args){const json=JSON.stringify(args);return pyodide.runPython(`json.loads(${JSON.stringify(json)}) if False else None`) /* placeholder */;}
@@ -133,6 +133,92 @@ function callPyPos(fn,args){
   pyodide.globals.set("_payload",payload);
   const result=pyodide.runPython(`_args = json.loads(_payload)\n_result = ${fn}(*_args)\njson.dumps(_result)`);
   return JSON.parse(result);
+}
+function callPyBank(fn,args){
+  pyodide.globals.set("_payload",JSON.stringify(args));
+  const out=pyodide.runPython(`_args = json.loads(_payload)\n_result = ${fn}(*_args)\njson.dumps({"result": _result, "bank": (_args[0] if _args and isinstance(_args[0], dict) else None)})`);
+  const parsed=JSON.parse(out);
+  const next=unwrapBank(parsed.result,null)||(parsed.bank&&parsed.bank.name!==undefined&&parsed.bank.cash!==undefined?parsed.bank:null);
+  return {result:parsed.result,bank:next};
+}
+function adoptBank(next){
+  if(!next)return;
+  const keep={paused:bank.paused,speed:bank.speed,last_active:bank.last_active,created_at:bank.created_at,location_details:bank.location_details};
+  bank={...keep,...next};
+}
+function applyMutation(fn,args){
+  const r=callPyBank(fn,args);
+  adoptBank(r.bank);
+  return r.result&&typeof r.result==="object"?r.result:{ok:!!r.bank,message:r.bank?"Done.":"Nothing changed."};
+}
+const metricPrev={};
+let ui={history:[],activity:[]};
+const TICK_MS=12000;let nextTickAt=0,lastFrame=0;
+const sevOf=(e)=>String(e?.severity||"").toLowerCase();
+const cap=(t)=>{t=String(t??"");return t.charAt(0).toUpperCase()+t.slice(1);};
+function ensureDelta(el){let d=el.nextElementSibling;if(!d||!d.classList.contains("delta")){d=document.createElement("em");d.className="delta flat";el.after(d);}return d;}
+function setMetric(id,value,fmt=money,opts={}){
+  const el=$(id);if(!el)return;
+  const v=Number(value||0),old=metricPrev[id];
+  el.textContent=fmt(v);
+  const d=opts.delta?ensureDelta(el):null;
+  if(old!==undefined&&Math.round(old*100)!==Math.round(v*100)){
+    const diff=v-old,good=opts.goodUp===false?diff<0:diff>0;
+    if(d){d.textContent=`${diff>0?"▲":"▼"} ${fmt(Math.abs(diff))}`;d.className="delta "+(good?"up":"down");}
+    el.classList.remove("flash");void el.offsetWidth;el.classList.add("flash");
+  }
+  metricPrev[id]=v;
+}
+function persistUI(){try{putSetting(`ui-${activeSlot}`,ui).catch(()=>{});}catch(_){}}
+function logActivity(tag,text){ui.activity.unshift({tag,text});if(ui.activity.length>40)ui.activity.length=40;}
+function recordSnapshot(){
+  if(!bank)return;
+  let snap;try{const s=getSummary();snap={day:bank.day,year:bank.year,assets:s.assets,deposits:bank.deposits,cash:bank.cash,income:bank.net_income,customers:bank.customers};}catch(_){return;}
+  let last=ui.history[ui.history.length-1];
+  if(last&&(snap.year<last.year||(snap.year===last.year&&snap.day<last.day))){ui.history=[];ui.activity=[];last=null;}
+  if(last&&last.year===snap.year&&last.day===snap.day)ui.history[ui.history.length-1]=snap;
+  else{
+    if(last){const parts=[];const d=(label,a,b)=>{const diff=Math.round(b-a);if(diff)parts.push(`${label} ${diff>0?"▲":"▼"} ${money(Math.abs(diff))}`);};
+      d("Deposits",last.deposits,snap.deposits);d("Cash",last.cash,snap.cash);d("Net income",last.income,snap.income);
+      const c=(snap.customers||0)-(last.customers||0);if(c)parts.push(`Customers ${c>0?"▲":"▼"} ${num(Math.abs(c))}`);
+      if(parts.length)logActivity(`Day ${snap.day}`,parts.join(" · "));}
+    ui.history.push(snap);if(ui.history.length>120)ui.history.shift();
+  }
+  persistUI();
+}
+function sparkline(values,cls){
+  if(values.length<2)return `<div class="trend-empty">Collecting data… the chart fills in as days pass.</div>`;
+  const w=300,h=64,pad=4,min=Math.min(...values),max=Math.max(...values),range=max-min||1;
+  const pts=values.map((v,i)=>[pad+i*(w-2*pad)/(values.length-1),h-pad-((v-min)/range)*(h-2*pad)]);
+  const line=pts.map(q=>q[0].toFixed(1)+","+q[1].toFixed(1)).join(" ");
+  return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-hidden="true"><polygon class="area ${cls}" points="${pad},${h} ${line} ${w-pad},${h}"/><polyline class="line ${cls}" points="${line}"/></svg>`;
+}
+function renderPnl(s){
+  const pl=s.pnl||{},has=pl.net!==undefined;
+  const set=(id,v,neg)=>{const el=$(id);if(!el)return;el.textContent=has?((neg&&v?"−":"")+money(Math.abs(v))):"—";};
+  set("pnl-interest",pl.interest);set("pnl-treasury",pl.treasury);set("pnl-fees",pl.fees);
+  set("pnl-funding",pl.funding_cost,true);set("pnl-payroll",pl.payroll,true);set("pnl-operating",pl.operating,true);set("pnl-writeoffs",pl.writeoffs,true);
+  const n=$("pnl-net");if(n){n.textContent=has?((pl.net<0?"−":"+")+money(Math.abs(pl.net))):"—";n.className=has?(pl.net<0?"down":"up"):"";}
+  const mk=$("strip-market");if(mk&&bank)mk.textContent=String(bank.market_condition||"Stable").toUpperCase();
+}
+function renderTrends(){
+  if(!$("trend-assets"))return;
+  const h=ui.history;
+  [["assets","trend-assets","c1"],["deposits","trend-deposits","c2"],["income","trend-income","c3"]].forEach(([key,id,cls])=>{
+    $(id).innerHTML=sparkline(h.map(x=>x[key]),cls);
+    const last=h[h.length-1],first=h[0];
+    $(id+"-val").textContent=last?money(last[key]):"—";
+    const change=last&&first&&h.length>1?last[key]-first[key]:0;
+    const c=$(id+"-chg");c.textContent=change?`${change>0?"▲":"▼"} ${money(Math.abs(change))} since tracking began`:"No change yet";c.className="trend-chg "+(change>0?"up":change<0?"down":"flat");
+  });
+  $("activity-list").innerHTML=ui.activity.slice(0,8).map(a=>`<div class="activity-row"><span class="activity-tag">${safe(a.tag)}</span><span>${safe(a.text)}</span></div>`).join("")||`<div class="empty-state">Activity appears here after each simulated day.</div>`;
+}
+function updateStrip(){
+  if(!bank||!$("strip-day"))return;
+  $("strip-day").textContent=`Day ${bank.day} · ${bank.year}`;
+  const left=Math.max(0,nextTickAt-Date.now());
+  $("tick-bar").style.width=`${paused?0:clamp(100-(left/TICK_MS)*100,0,100)}%`;
+  $("tick-countdown").textContent=paused?"Paused":`Next day in ${Math.ceil(left/1000)}s`;
 }
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains("slots"))db.createObjectStore("slots",{keyPath:"slot"});if(!db.objectStoreNames.contains("settings"))db.createObjectStore("settings",{keyPath:"key"});};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});}
 let db;
@@ -169,6 +255,8 @@ function enterGame(){
   paused=!!bank.paused;speed=bank.speed||1;updatePauseButton();
   document.querySelectorAll(".speed-btn").forEach(x=>x.classList.toggle("active",Number(x.dataset.speed)===speed));
   try{renderAll();}catch(err){console.error(err);toast("Display error: "+(err.message||err),true);}
+  Object.keys(metricPrev).forEach(k=>delete metricPrev[k]);
+  getSetting(`ui-${activeSlot}`).then(v=>{ui=v&&Array.isArray(v.history)?v:{history:[],activity:[]};if(!Array.isArray(ui.activity))ui.activity=[];recordSnapshot();renderAll();}).catch(()=>{});
   startTimer();
 }
 function startNewGame(){
@@ -176,12 +264,30 @@ function startNewGame(){
   try{location=getSelectedLocation();}catch(err){toast(err.message,true);return;}
   const name=$("bank-name").value.trim()||"Northstar Community Bank";
   const created=callPyPos("new_game",[name,location.label,selectedDifficulty,null]);
-  created.location_details={country:location.country,country_code:location.country_code,region:location.region,province:location.province,city:location.city,population:location.population};
+  created.location_details={country:location.country,country_code:location.country_code,region:location.region,province:location.province,city:location.city,population:location.population,place_id:location.place_id,admin1_code:location.admin1_code,admin2_code:location.admin2_code};
+  try{const rr=callPyBank("apply_regional_context",[created,created.location_details]);if(rr.bank)Object.assign(created,rr.bank);}catch(err){console.warn("Regional market context skipped:",err);}
   bank=created;bank.created_at=Date.now();bank.last_active=Date.now();bank.paused=false;bank.speed=1;
-  putSlot(activeSlot,bank).then(()=>{enterGame();toast("Your institution has commenced operations.");});
+  putSetting(`ui-${activeSlot}`,{history:[],activity:[]}).catch(()=>{}).then(()=>putSlot(activeSlot,bank)).then(()=>{enterGame();toast("Your institution has commenced operations.");});
 }
 function stopTimer(){if(timer)clearInterval(timer);timer=null;}
-function startTimer(){stopTimer();timer=setInterval(()=>{if(!bank||paused)return;try{const result=callPyPos("tick",[bank,datasets,speed,null]);bank=unwrapBank(result,bank);renderAll();if(result?.new_events?.length)result.new_events.forEach(e=>toast(e.title));saveCurrent();}catch(err){console.error("Simulation tick failed:",err);}},12000);}
+function runTick(){
+  try{
+    const r=callPyBank("tick",[bank,datasets,speed,null]);adoptBank(r.bank);
+    recordSnapshot();renderAll();
+    if(r.result?.new_events?.length)r.result.new_events.forEach(e=>toast(e.title));
+    saveCurrent();
+  }catch(err){console.error("Simulation tick failed:",err);}
+}
+function startTimer(){
+  stopTimer();lastFrame=Date.now();nextTickAt=lastFrame+TICK_MS;
+  timer=setInterval(()=>{
+    if(!bank)return;const now=Date.now();
+    if(paused){nextTickAt+=now-lastFrame;lastFrame=now;updateStrip();return;}
+    lastFrame=now;
+    if(now>=nextTickAt){nextTickAt=now+TICK_MS;runTick();}
+    updateStrip();
+  },250);
+}
 function updatePauseButton(){$("pause-btn").textContent=paused?"▶ Resume":"Ⅱ Pause";}
 function setView(view){
   currentView=view;document.querySelectorAll(".view").forEach(el=>el.classList.remove("active"));
@@ -193,33 +299,33 @@ function getSummary(){return callPyPos("summary",[bank]);}
 function renderAll(){if(!bank)return;const s=getSummary();
   $("side-bank-name").textContent=bank.name;$("side-bank-location").textContent=bank.location;$("welcome-bank-name").textContent=bank.name;
   $("bank-level").textContent=bank.level;$("level-stage").textContent=s.stage;$("date-label").textContent=`Day ${bank.day} · ${bank.year}`;
-  $("metric-assets").textContent=money(s.assets);$("metric-deposits").textContent=money(bank.deposits);$("metric-liquidity").textContent=money(bank.cash);$("metric-income").textContent=money(bank.net_income);
+  setMetric("metric-assets",s.assets,money,{delta:true});setMetric("metric-deposits",bank.deposits,money,{delta:true});setMetric("metric-liquidity",bank.cash,money,{delta:true});setMetric("metric-income",bank.net_income,money,{delta:true});
   $("assets-change").textContent=`${num(bank.customers)} customers · ${bank.branches} branch`;
   $("liquidity-status").textContent=s.liquidity_ratio<12?"Liquidity needs attention":"Cash and liquid assets";
-  $("balance-cash").textContent=money(bank.cash);$("balance-loans").textContent=money(bank.loans);$("balance-other").textContent=money(bank.other_assets);$("balance-liabilities").textContent=money(s.liabilities);$("balance-equity").textContent=money(s.equity);
-  $("capital-ratio").textContent=`${s.capital_ratio}%`;$("capital-bar").style.width=`${clamp(s.capital_ratio,0,100)}%`;
+  setMetric("balance-cash",bank.cash);setMetric("balance-loans",bank.loans);setMetric("balance-other",bank.other_assets);setMetric("balance-liabilities",s.liabilities);setMetric("balance-equity",s.equity);
+  $("capital-ratio").textContent=`${Number(s.capital_ratio).toFixed(2)}%`;$("capital-bar").style.width=`${clamp(s.capital_ratio,0,100)}%`;
   $("recent-events").innerHTML=bank.events.slice(0,3).map(eventHTML).join("")||`<div class="empty-state">No notable developments yet. The market may be quiet for now.</div>`;
   $("alert-count").textContent=bank.events.filter(e=>e.status==="Open").length;
-  $("ops-accounts").textContent=num(bank.accounts);$("ops-transactions").textContent=num(bank.transactions);$("ops-confidence").textContent=`${bank.confidence.toFixed(0)}%`;$("branch-count").textContent=bank.branches;$("ops-location").textContent=bank.location;$("ops-customers").textContent=num(bank.customers);
-  $("loan-total").textContent=money(bank.loans);$("loan-npl").textContent=money(bank.npl||0);$("npl-ratio").textContent=`${s.npl_ratio}% of portfolio`;$("loan-apps").textContent=bank.loan_applications.length;
+  setMetric("ops-accounts",bank.accounts,num,{delta:true});setMetric("ops-transactions",bank.transactions,num,{delta:true});$("ops-confidence").textContent=`${bank.confidence.toFixed(0)}%`;$("branch-count").textContent=bank.branches;$("ops-location").textContent=bank.location;if($("ops-market"))$("ops-market").textContent=s.market_label?`${s.market_label}${s.market_known&&s.market_population?` · pop. ${num(s.market_population)}`:""}`:"—";$("ops-customers").textContent=num(bank.customers);
+  setMetric("loan-total",bank.loans,money,{delta:true});$("loan-npl").textContent=money(bank.npl||0);$("npl-ratio").textContent=`${s.npl_ratio}% of portfolio`;$("loan-apps").textContent=bank.loan_applications.length;
   $("credit-policy").value=bank.credit_policy;$("loan-rate").textContent=({"conservative":"8.5%","balanced":"10.0%","growth":"11.5%"})[bank.credit_policy];
   currentApplication=bank.loan_applications[0]||null;
   $("loan-request").innerHTML=currentApplication?`<h4>${safe(currentApplication.borrower)}</h4><p>Request: <b>${money(currentApplication.amount)}</b><br>Purpose: ${safe(currentApplication.purpose)}<br>Indicative credit score: ${currentApplication.credit_score}/100 · ${safe(currentApplication.risk)} risk</p>`:`<div class="empty-state">No pending applications. New opportunities may arrive as the simulation develops.</div>`;
   $("approve-loan").disabled=!currentApplication;$("reject-loan").disabled=!currentApplication;
   $("treasury-cash").textContent=money(bank.cash);$("treasury-deposits").textContent=money(bank.deposits);$("treasury-coverage").textContent=`${s.liquidity_ratio}%`;$("t-assets").textContent=money(s.assets);$("t-liabilities").textContent=money(s.liabilities);$("t-equity").textContent=money(s.equity);$("t-buffer").textContent=money(bank.cash);
   $("employee-count").textContent=bank.employees.length;$("employee-morale").textContent=`${s.morale}%`;$("employee-payroll").textContent=money(s.payroll);
-  $("employee-table").innerHTML=bank.employees.map(e=>`<tr><td><div class="employee-name"><span class="employee-avatar">${safe(e.name[0]||"E")}</span><strong>${safe(e.name)}</strong></div></td><td>${safe(e.role)}</td><td>${safe(e.department)}</td><td>${e.competence}%</td><td>${e.loyalty}%</td><td>${money(e.salary)}</td><td><button class="mini-action" data-employee="${e.id}">Review</button></td></tr>`).join("");
+  $("employee-table").innerHTML=bank.employees.map(e=>`<tr><td><div class="employee-name"><span class="employee-avatar">${safe(e.name[0]||"E")}</span><strong>${safe(e.name)}</strong></div></td><td>${safe(e.role)}</td><td>${safe(e.department)}</td><td>${Math.round(e.competence)}%</td><td>${Math.round(e.loyalty)}%</td><td>${money(e.salary)}</td><td><button class="mini-action" data-employee="${e.id}">Review</button></td></tr>`).join("");
   $("competitor-count").textContent=bank.competitors.length;$("market-share").textContent=`${s.market_share}%`;$("market-condition").textContent=bank.market_condition;
   $("competitor-list").innerHTML=bank.competitors.map(r=>`<div class="competitor-row"><div class="competitor-logo">⌂</div><div><b>${safe(r.name)}</b><p>${safe(r.strategy)} · ${safe(r.location)}<br>Recent move: ${safe(r.last_move)}</p></div><div class="competitor-metrics"><strong>${money(r.deposits)}</strong><small>Estimated deposits</small></div></div>`).join("");
-  $("event-list").innerHTML=bank.events.map(e=>`<article class="event-card"><div class="event-mark">${e.severity==="Positive"?"↗":e.severity==="Material"?"!":"◉"}</div><div><h3>${safe(e.title)}</h3><p>${safe(e.description)}</p><div class="event-meta">DAY ${e.day} · ${safe(e.category)} · ${safe(e.severity)} · ${safe(e.status)}</div></div><div class="event-actions">${e.status==="Open"?(e.choices||[]).map(c=>`<button class="secondary-btn" data-event="${e.id}" data-action="${c.action}">${safe(c.label)}</button>`).join(""):`<span class="tag">REVIEWED</span>`}</div></article>`).join("")||`<div class="empty-state">No events have been generated yet. Your institution's environment is currently quiet.</div>`;
-  const open=bank.events.find(e=>e.status==="Open"&&e.severity==="Material");$("global-alert").classList.toggle("hidden",!open);$("global-alert").textContent=open?`Attention: ${open.title} — review the Situation Center for available responses.`:"";
+  $("event-list").innerHTML=bank.events.map(e=>`<article class="event-card"><div class="event-mark">${sevOf(e)==="positive"?"↗":sevOf(e)==="material"?"!":"◉"}</div><div><h3>${safe(e.title)}</h3><p>${safe(e.description)}</p>${e.impact?`<p class="event-impact">${safe(e.impact)}</p>`:""}<div class="event-meta">DAY ${e.day} · ${safe(e.category)} · ${safe(e.severity)} · ${safe(e.status)}</div></div><div class="event-actions">${e.status==="Open"?(e.choices||[]).map(c=>`<button class="secondary-btn" data-event="${e.id}" data-action="${c.action}">${safe(cap(c.label))}</button>`).join(""):`<span class="tag">${safe(String(e.status||"Noted")).toUpperCase()}</span>`}</div></article>`).join("")||`<div class="empty-state">No events have been generated yet. Your institution's environment is currently quiet.</div>`;
+  const open=bank.events.find(e=>e.status==="Open"&&sevOf(e)==="material");$("global-alert").classList.toggle("hidden",!open);$("global-alert").textContent=open?`Attention: ${open.title} — review the Situation Center for available responses.`:"";renderPnl(s);renderTrends();updateStrip();
 }
-function eventHTML(e){return `<div class="recent-event"><div class="event-mark">${e.severity==="Positive"?"↗":"◉"}</div><div><b>${safe(e.title)}</b><p>${safe(e.description)}</p></div></div>`;}
-async function actionResult(result){if(!result.ok){toast(result.message,true);return;}toast(result.message);renderAll();await saveCurrent();}
-function doAction(name){const result=callPyPos("action",[bank,name]);actionResult(result);}
+function eventHTML(e){return `<div class="recent-event"><div class="event-mark">${sevOf(e)==="positive"?"↗":"◉"}</div><div><b>${safe(e.title)}</b><p>${safe(e.description)}</p></div></div>`;}
+async function actionResult(result){if(!result.ok){toast(result.message,true);return;}toast(result.message);logActivity(`Day ${bank.day}`,result.message);recordSnapshot();renderAll();await saveCurrent();}
+function doAction(name){const result=applyMutation("action",[bank,name]);actionResult(result);}
 function openHireModal(){
   showModal(`<h2>Recruit an employee</h2><p>Recruitment is available from the beginning. Consider the role, department, and ongoing salary commitment.</p><label class="field-label">Employee name</label><input id="hire-name" placeholder="e.g. Alex Dela Cruz"><label class="field-label">Position</label><select id="hire-role"><option>Operations Manager</option><option>Credit Officer</option><option>Risk Analyst</option><option>Compliance Officer</option><option>Technology Officer</option><option>Customer Service Associate</option><option>Branch Manager</option><option>Finance Officer</option><option>Human Resources Officer</option></select><label class="field-label">Department</label><select id="hire-dept"><option>Operations</option><option>Credit</option><option>Risk Management</option><option>Compliance</option><option>Technology</option><option>Customer Service</option><option>Branch Management</option><option>Finance</option><option>Human Resources</option></select><label class="field-label">Daily salary (PHP)</label><input id="hire-salary" type="number" min="700" max="15000" value="1800"><div class="modal-actions"><button class="secondary-btn" id="cancel-modal">Cancel</button><button class="primary-btn" id="confirm-hire">Recruit employee</button></div>`);
-  $("cancel-modal").onclick=closeModal;$("confirm-hire").onclick=async()=>{const result=callPyPos("hire",[bank,$("hire-name").value,$("hire-role").value,$("hire-dept").value,Number($("hire-salary").value)]);closeModal();await actionResult(result);};
+  $("cancel-modal").onclick=closeModal;$("confirm-hire").onclick=async()=>{const result=applyMutation("hire",[bank,$("hire-name").value,$("hire-role").value,$("hire-dept").value,Number($("hire-salary").value)]);closeModal();await actionResult(result);};
 }
 function openSaveModal(){
   showModal(`<h2>Save & export</h2><p>Three independent save slots. Export a slot to move it to another browser or device.</p><div id="save-slot-list">Loading slots…</div><div class="modal-actions"><button class="secondary-btn" id="close-save">Close</button><label class="primary-btn" style="text-align:center;cursor:pointer">Import save<input id="import-save" type="file" accept=".json,application/json" hidden></label></div>`);
@@ -260,15 +366,17 @@ function bindEvents(){
   document.querySelectorAll(".speed-btn").forEach(b=>b.onclick=async()=>{speed=Number(b.dataset.speed);bank.speed=speed;document.querySelectorAll(".speed-btn").forEach(x=>x.classList.toggle("active",x===b));await saveCurrent();});
   $("theme-toggle").onclick=()=>openSettings();$("settings-menu").onclick=()=>openSettings();$("save-menu").onclick=()=>openSaveModal();
   $("hire-employee").onclick=openHireModal;
-  document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>{const a=b.dataset.action;if(a==="hire")openHireModal();else if(a==="deposit"){const r=callPyPos("campaign",[bank]);actionResult(r);}else if(a==="loan")setView("lending");else if(a==="invest")doAction("funding");}));
-  $("run-campaign").onclick=()=>actionResult(callPyPos("campaign",[bank]));
+  if($("repay-funding"))$("repay-funding").onclick=()=>doAction("repay");
+  if($("open-branch"))$("open-branch").onclick=()=>doAction("branch");
+  document.querySelectorAll("[data-action]").forEach(b=>b.addEventListener("click",()=>{const a=b.dataset.action;if(a==="hire")openHireModal();else if(a==="deposit"){const r=applyMutation("campaign",[bank]);actionResult(r);}else if(a==="loan")setView("lending");else if(a==="invest")doAction("funding");}));
+  $("run-campaign").onclick=()=>actionResult(applyMutation("campaign",[bank]));
   $("improve-service").onclick=()=>doAction("service");
-  $("approve-loan").onclick=()=>{if(!currentApplication)return;actionResult(callPyPos("approve_loan",[bank,currentApplication.id]));};
-  $("reject-loan").onclick=()=>{if(!currentApplication)return;actionResult(callPyPos("reject_loan",[bank,currentApplication.id]));};
+  $("approve-loan").onclick=()=>{if(!currentApplication)return;actionResult(applyMutation("approve_loan",[bank,currentApplication.id]));};
+  $("reject-loan").onclick=()=>{if(!currentApplication)return;actionResult(applyMutation("reject_loan",[bank,currentApplication.id]));};
   $("credit-policy").onchange=async e=>{bank.credit_policy=e.target.value;await saveCurrent();renderAll();toast("Credit policy updated.");};
   $("retain-earnings").onclick=()=>doAction("retain");$("wholesale-funding").onclick=()=>doAction("funding");$("tighten-lending").onclick=()=>doAction("tighten");
-  $("event-list").onclick=e=>{const b=e.target.closest("[data-event]");if(!b)return;actionResult(callPyPos("resolve_event",[bank,b.dataset.event,b.dataset.action]));};
-  $("employee-table").onclick=e=>{const b=e.target.closest("[data-employee]");if(!b)return;const emp=bank.employees.find(x=>x.id===b.dataset.employee);if(emp)showModal(`<h2>${safe(emp.name)}</h2><p>${safe(emp.role)} · ${safe(emp.department)}</p><div class="info-row"><span>Competence</span><strong>${emp.competence}%</strong></div><div class="info-row"><span>Loyalty</span><strong>${emp.loyalty}%</strong></div><div class="info-row"><span>Morale</span><strong>${emp.morale}%</strong></div><div class="info-row"><span>Experience</span><strong>${emp.experience} years</strong></div><div class="info-row"><span>Daily salary</span><strong>${money(emp.salary)}</strong></div><div class="modal-actions"><button class="primary-btn" id="close-emp">Close</button></div>`);$("close-emp").onclick=closeModal;};
+  $("event-list").onclick=e=>{const b=e.target.closest("[data-event]");if(!b)return;actionResult(applyMutation("resolve_event",[bank,b.dataset.event,b.dataset.action]));};
+  $("employee-table").onclick=e=>{const b=e.target.closest("[data-employee]");if(!b)return;const emp=bank.employees.find(x=>x.id===b.dataset.employee);if(emp)showModal(`<h2>${safe(emp.name)}</h2><p>${safe(emp.role)} · ${safe(emp.department)}</p><div class="info-row"><span>Competence</span><strong>${Math.round(emp.competence)}%</strong></div><div class="info-row"><span>Loyalty</span><strong>${Math.round(emp.loyalty)}%</strong></div><div class="info-row"><span>Morale</span><strong>${Math.round(emp.morale)}%</strong></div><div class="info-row"><span>Experience</span><strong>${emp.experience} years</strong></div><div class="info-row"><span>Daily salary</span><strong>${money(emp.salary)}</strong></div><div class="modal-actions"><button class="secondary-btn" id="raise-emp">Give 10% raise</button><button class="primary-btn" id="close-emp">Close</button></div>`);if($("close-emp"))$("close-emp").onclick=closeModal;if($("raise-emp"))$("raise-emp").onclick=async()=>{closeModal();await actionResult(applyMutation("give_raise",[bank,emp.id]));};};
 }
 async function init(){
   try{
@@ -278,7 +386,7 @@ async function init(){
     $("boot-screen").classList.add("hidden");$("app").classList.remove("hidden");
     // Resume most recently active populated slot; otherwise show new game setup.
     let latest=null;for(let i=1;i<=SLOT_COUNT;i++){const rec=await getSlot(i);if(rec&&(!latest||rec.updatedAt>latest.rec.updatedAt))latest={slot:i,rec};}
-    if(latest){activeSlot=latest.slot;bank=migrateSave(latest.rec.data);const elapsed=bank.last_active?Date.now()-bank.last_active:0;if(elapsed>60000){try{const result=callPyPos("offline_catchup",[bank,datasets,Math.min(86400000,elapsed/1000)]);const caught=unwrapBank(result,null);if(caught){bank=caught;if(result?.simulated_ticks)toast(`Welcome back. ${result.simulated_ticks} offline simulation ticks were processed (maximum 24 hours).`);}else console.warn("Offline catch-up returned an unexpected result; keeping saved state.",result);}catch(err){console.warn("Offline catch-up skipped; keeping saved state.",err);}}enterGame();}
+    if(latest){activeSlot=latest.slot;bank=migrateSave(latest.rec.data);const elapsed=bank.last_active?Date.now()-bank.last_active:0;if(elapsed>60000){try{const r=callPyBank("offline_catchup",[bank,datasets,Math.min(86400000,elapsed/1000)]);if(r.bank){adoptBank(r.bank);if(r.result?.simulated_ticks)toast(`Welcome back. ${r.result.simulated_ticks} offline simulation ticks were processed (maximum 24 hours).`);}else console.warn("Offline catch-up returned an unexpected result; keeping saved state.",r.result);}catch(err){console.warn("Offline catch-up skipped; keeping saved state.",err);}}enterGame();}
     else showSetup();
   }catch(err){$("app").classList.add("hidden");$("boot-screen").classList.remove("hidden");$("boot-screen").innerHTML=`<div class="boot-mark">OB</div><h1>OWN A BANK</h1><p>Unable to initialize the simulation.</p><p style="max-width:560px;text-align:center;color:#e58b8b">${safe(err.message)}</p><p>Check your internet connection and reload. The local Pyodide runtime is prepared by the repository workflow; the CDN is used only as a fallback.</p>`;console.error(err);}
 }
